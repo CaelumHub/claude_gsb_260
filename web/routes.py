@@ -16,8 +16,12 @@ from flask import Blueprint, current_app, jsonify, request
 
 from nlp import (get_constituency_parser, get_embeddings, get_keywords, get_ner,
                  get_parser, get_segmenter, get_sentiment, get_summarizer,
-                 get_tagger, get_translator, ENTITY_TYPE_NAMES, TAG_NAMES,
+                 get_tagger, get_translator, normalize_text,
+                 apply_norm_decisions, ENTITY_TYPE_NAMES, TAG_NAMES,
                  DEP_REL_NAMES, PHRASE_NAMES, POLARITY_NAMES)
+from nlp import langid
+from nlp.batchnorm import process_batch as batch_normalize
+from nlp.consistency import verify_consistency
 from nlp.lexicon import STOPWORDS
 from storage import StoreRegistry
 
@@ -68,6 +72,13 @@ def _resolve_text(data: dict) -> tuple[str, Optional[str]]:
             return record.get("text", ""), corpus_id
         return "", corpus_id
     return "", None
+
+
+def _task_text(data: dict) -> tuple[str, Optional[str]]:
+    """下游任务取文：显式传入 normalized_text 时优先使用（规范化回流）。"""
+    if data.get("normalized_text") is not None:
+        return data["normalized_text"], data.get("corpus_id")
+    return _resolve_text(data)
 
 
 def _clean(text: str, remove_stopwords: bool = True) -> dict:
@@ -196,13 +207,221 @@ def clean_corpus(cid: str):
 
 
 # ---------------------------------------------------------------------------
+# 语言识别与文本规范化
+# ---------------------------------------------------------------------------
+
+NORMALIZE_SPEC_KEYS = ("script", "punctuation", "digits", "letters", "quotes",
+                       "ellipsis", "whitespace", "remove_cjk_spaces", "protect",
+                       "protect_regex")
+
+
+def _norm_spec(data: dict) -> dict:
+    return {k: data[k] for k in NORMALIZE_SPEC_KEYS if k in data}
+
+
+@api.post("/language/detect")
+def language_detect():
+    """篇章级 + 段落级 + 混合片段语言识别。"""
+    data = _payload()
+    text, cid = _task_text(data)
+    if not text:
+        return jsonify({"error": "缺少文本"}), 400
+    doc = langid.profile(text).to_dict()
+    paragraphs = langid.detect_paragraphs(text)
+    segments = langid.segment_mixed(text)
+    return jsonify({
+        "language": doc,
+        "paragraphs": [{k: v for k, v in p.items() if k != "scores" or True}
+                       for p in paragraphs],
+        "segments": segments,
+        "corpus_id": cid,
+    })
+
+
+@api.post("/normalize")
+def normalize_one():
+    """单篇规范化：返回逐段视图与逐处变更清单（不落库）。"""
+    data = _payload()
+    text, cid = _task_text(data)
+    if not text:
+        return jsonify({"error": "缺少文本"}), 400
+    plan = normalize_text(text, _norm_spec(data) or None)
+    plan["corpus_id"] = cid
+    return jsonify(plan)
+
+
+@api.post("/normalize/confirm")
+def normalize_confirm():
+    """按人工逐处决策重建规范文本；可落库为新语料，并做一致性校验。"""
+    data = _payload()
+    plan = data.get("plan")
+    if not plan or "original" not in plan:
+        return jsonify({"error": "缺少规范化方案 plan"}), 400
+    decisions = data.get("decisions", {})
+    result = apply_norm_decisions(plan, decisions)
+
+    if data.get("verify", True):
+        result["consistency"] = verify_consistency(
+            result["original"], result["normalized"])
+
+    saved_id = None
+    if data.get("save_as_corpus"):
+        name = data.get("name") or f"规范文本_{int(time.time())}"
+        rec = {
+            "name": name,
+            "text": result["normalized"],
+            "source_corpus_id": data.get("corpus_id") or plan.get("corpus_id"),
+            "spec": result.get("spec", {}),
+            "norm_stats": result.get("stats", {}),
+            "consistency": result.get("consistency"),
+            "created_at": time.time(),
+        }
+        saved_id = _registry().task("corpus").insert(rec)
+    result["saved_corpus_id"] = saved_id
+    # 同时在 normalize 任务结果区留痕
+    _store_result("normalize", result["original"],
+                  {"normalized": result["normalized"],
+                   "stats": result.get("stats", {}),
+                   "consistency": result.get("consistency")},
+                  corpus_id=data.get("corpus_id") or plan.get("corpus_id"))
+    return jsonify(result)
+
+
+@api.post("/normalize/batch")
+def normalize_batch():
+    """批量规范化：逐篇隔离，单篇失败/超时不影响整批。
+
+    请求体::
+
+        {
+          "spec": {...},
+          "corpus_ids": ["corpus_1", ...],   # 省略则处理全部语料
+          "max_workers": 4, "timeout": 30, "save": false,
+          "decisions": {"corpus_1": {"0": false, ...}}
+        }
+    """
+    data = _payload()
+    spec = _norm_spec(data)
+    store = _registry().task("corpus")
+    cids = data.get("corpus_ids") or []
+    if cids:
+        docs, used_ids = [], []
+        for cid in cids:
+            rec = store.get(cid)
+            if rec and not rec.get("_deleted"):
+                docs.append({"id": cid, "name": rec.get("name", ""),
+                             "text": rec.get("text", "")})
+                used_ids.append(cid)
+        cids = used_ids
+    else:
+        docs = [{"id": r["id"], "name": r.get("name", ""), "text": r["text"]}
+                for r in store.all() if not r.get("_deleted")]
+        cids = [d["id"] for d in docs]
+    if not docs:
+        return jsonify({"error": "没有可处理的语料"}), 400
+
+    results = batch_normalize(
+        docs, spec or None, decisions_map=data.get("decisions"),
+        max_workers=int(data.get("max_workers", 4)),
+        chunk_size=int(data.get("chunk_size", 32)),
+        timeout=float(data.get("timeout", 30)))
+
+    succeeded = sum(1 for r in results if r["ok"])
+    failed = len(results) - succeeded
+    run_id = uuid.uuid4().hex[:12]
+
+    saved_ids = {}
+    if data.get("save"):
+        for r in results:
+            if not r.get("ok"):
+                continue
+            src = store.get(r["id"]) or {}
+            rec = {
+                "name": f"{r.get('name') or '语料'}（规范）",
+                "text": r["normalized"],
+                "source_corpus_id": r["id"],
+                "batch_run_id": run_id,
+                "spec": spec,
+                "created_at": time.time(),
+            }
+            saved_ids[r["id"]] = store.insert(rec)
+
+    record = {
+        "run_id": run_id, "batch": True,
+        "spec": spec, "corpus_ids": cids,
+        "doc_count": len(results), "succeeded": succeeded, "failed": failed,
+        "save": bool(data.get("save")), "saved_ids": saved_ids,
+        "started": time.time(), "finished": time.time(),
+        "results": [{k: v for k, v in r.items() if k != "plan"} for r in results],
+    }
+    rid = _registry().task("normalize_run").insert(record)
+    return jsonify({"run_id": run_id, "id": rid,
+                    "succeeded": succeeded, "failed": failed,
+                    "doc_count": len(results), "saved_ids": saved_ids})
+
+
+@api.get("/normalize/batch/<run_id>")
+def get_normalize_batch(run_id: str):
+    records = _registry().task("normalize_run").query(
+        where=[("run_id", "eq", run_id)])
+    if not records:
+        return jsonify({"error": "批量任务不存在"}), 404
+    return jsonify(records[0])
+
+
+@api.post("/normalize/verify")
+def normalize_verify():
+    """对给定原文/规范文本跑下游任务一致性校验。"""
+    data = _payload()
+    original = (data.get("original") or "").strip()
+    normalized = (data.get("normalized") or "").strip()
+    if not original or not normalized:
+        return jsonify({"error": "缺少 original 或 normalized"}), 400
+    tol = float(data.get("polarity_tol", 0.25))
+    return jsonify(verify_consistency(original, normalized, polarity_tol=tol))
+
+
+@api.get("/normalize/options")
+def normalize_options():
+    """给前端提供目标规范的可选项与说明。"""
+    return jsonify({
+        "script": [
+            {"id": "simplified", "name": "繁体 → 简体"},
+            {"id": "traditional", "name": "简体 → 繁体（保守，歧义字不转）"},
+            {"id": "auto", "name": "自动：含繁体则收敛为简体"},
+            {"id": "none", "name": "不转换字形"}],
+        "punctuation": [
+            {"id": "half", "name": "全部半角 ASCII"},
+            {"id": "cjk", "name": "保留中文标点，仅折半全角符号"},
+            {"id": "full", "name": "半角标点 → 中文全角"},
+            {"id": "keep", "name": "保持原样"}],
+        "digits": [{"id": "half", "name": "半角数字"},
+                   {"id": "full", "name": "全角数字"},
+                   {"id": "keep", "name": "保持原样"}],
+        "letters": [{"id": "half", "name": "半角字母"},
+                    {"id": "full", "name": "全角字母"},
+                    {"id": "keep", "name": "保持原样"}],
+        "quotes": [{"id": "straight", "name": "统一为直引号 \" '"},
+                   {"id": "keep", "name": "保持原样"}],
+        "ellipsis": [{"id": "collapse", "name": "…/…… → ... ，—/—— → --"},
+                     {"id": "keep", "name": "保持原样"}],
+        "whitespace": [{"id": "collapse", "name": "折叠空白（Tab/CR/连续空格）"},
+                       {"id": "keep", "name": "保持原样"}],
+        "change_reasons": {
+            "script": "繁简字形转换", "punct": "全角/半角标点",
+            "quote": "引号风格", "digit": "全角/半角数字",
+            "letter": "全角/半角字母", "space": "空白统一"},
+    })
+
+
+# ---------------------------------------------------------------------------
 # 分词与词性标注
 # ---------------------------------------------------------------------------
 
 @api.post("/segment")
 def segment():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     seg = get_segmenter()
@@ -216,7 +435,7 @@ def segment():
 @api.post("/pos")
 def pos_tag():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     tagger = get_tagger()
@@ -234,7 +453,7 @@ def pos_tag():
 @api.post("/parse")
 def parse():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     dep = get_parser().parse(text)
@@ -257,7 +476,7 @@ def parse():
 @api.post("/ner")
 def ner():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     entities = get_ner().recognize(text)
@@ -296,7 +515,7 @@ def ner_annotations():
 @api.post("/sentiment")
 def sentiment():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     result = get_sentiment().analyze(text)
@@ -313,7 +532,7 @@ def sentiment():
 @api.post("/summary")
 def summary():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     result = get_summarizer().summarize(
@@ -331,7 +550,7 @@ def summary():
 @api.post("/translate")
 def translate():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     result = get_translator().translate(text, direction=data.get("direction", "zh2en"))
@@ -347,7 +566,7 @@ def translate():
 @api.post("/keywords")
 def keywords():
     data = _payload()
-    text, cid = _resolve_text(data)
+    text, cid = _task_text(data)
     if not text:
         return jsonify({"error": "缺少文本"}), 400
     result = get_keywords().extract(text, top_k=data.get("top_k", 10),

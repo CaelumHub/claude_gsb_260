@@ -4,6 +4,7 @@
 
 const PAGES = [
   { file: "corpus.html",    name: "语料库管理",   desc: "上传与清洗" },
+  { file: "normalize.html", name: "语言识别与规范化", desc: "中英/繁简/全半角" },
   { file: "segment.html",   name: "分词与词性标注", desc: "切词 + POS" },
   { file: "parse.html",     name: "句法分析树",   desc: "依存 / 成分树" },
   { file: "ner.html",       name: "命名实体识别", desc: "NER 与标注" },

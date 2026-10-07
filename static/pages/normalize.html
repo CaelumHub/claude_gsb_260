@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>语言识别与规范化 - NLP 流水线平台</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab { padding: 7px 16px; border: 1px solid var(--border); border-radius: 999px;
+      background: #fff; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-muted); }
+    .tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .spec-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; }
+    .spec-grid label { margin-bottom: 2px; }
+    .lang-tag { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px;
+      font-weight: 700; margin-left: 8px; }
+    .lang-zh { background: #fef3c7; color: #b45309; }
+    .lang-en { background: #dbeafe; color: #1d4ed8; }
+    .lang-mixed { background: #f3e8ff; color: #7e22ce; }
+    .lang-unknown { background: #f1f5f9; color: #64748b; }
+    .seg-zh { background: #fef9c3; border-radius: 3px; }
+    .seg-en { background: #dbeafe; border-radius: 3px; }
+    .seg-number { background: #cffafe; border-radius: 3px; }
+    .para-card { border: 1px solid var(--border); border-radius: 9px; padding: 14px; margin-bottom: 12px; background: #fff; }
+    .para-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+    .para-text { white-space: pre-wrap; font-size: 14px; line-height: 2; }
+    .chg { border-bottom: 2px solid var(--amber); background: #fffbeb; border-radius: 3px; cursor: pointer;
+      position: relative; }
+    .chg.rejected { border-bottom-color: var(--red); background: #fef2f2; }
+    .chg.accepted-manual { border-bottom-color: var(--green); background: #ecfdf5; }
+    .chg-pill { font-family: var(--mono); font-size: 12px; }
+    .change-list { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px;
+      display: flex; flex-direction: column; gap: 6px; }
+    .change-row { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+    .change-row .arrow { color: var(--text-muted); }
+    .change-row .kind { font-size: 11px; background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 999px; padding: 0 8px; color: var(--text-muted); }
+    .change-row button { padding: 2px 10px; font-size: 12px; }
+    .change-row input[type=text] { width: 90px; padding: 3px 8px; font-size: 12px; }
+    .norm-out { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; border-radius: 9px;
+      padding: 14px; font-size: 13px; max-height: 300px; overflow: auto; }
+    .check-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .check-detail { color: var(--text-muted); font-size: 12px; margin-left: 8px; }
+    .doc-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border);
+      border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+    .doc-row .grow { flex: 1; min-width: 0; }
+    .progress-bar { height: 8px; background: #e5e7eb; border-radius: 999px; overflow: hidden; margin: 10px 0; }
+    .progress-bar > div { height: 100%; background: var(--primary); transition: width .2s; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="site-sidebar"></aside>
+
+  <main class="main">
+    <h1 class="page-title">语言识别与文本规范化</h1>
+    <p class="page-desc">自动识别中英 / 繁简 / 混合文本，按指定目标规范做全半角、繁简、数字与空白统一；逐段展示、逐处确认后回流下游任务。</p>
+
+    <div class="tabs">
+      <button class="tab active" id="tab-single">单篇识别与确认</button>
+      <button class="tab" id="tab-batch">批量规范化</button>
+    </div>
+
+    <!-- ================= 单篇 ================= -->
+    <section id="panel-single">
+      <section class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;flex:1">输入</h2>
+          <select id="corpus-sel" style="max-width:280px"><option value="">— 从语料库选择 —</option></select>
+        </div>
+        <textarea id="text" style="min-height:130px">這是一個　測試！The Ｑｕｉｃｋ brown fox jumps over IBM Corp.，數字１２３與「引號」。
+
+讀者請注意：我們將於週五在台北舉辦說明會，歡迎踴躍參加，價格是１９９元。
+Natural language processing is fun, 机器学习也很有趣。</textarea>
+
+        <h3 class="mt">目标规范</h3>
+        <div class="spec-grid">
+          <div><label>字形（繁简）</label><select id="spec-script"></select></div>
+          <div><label>标点</label><select id="spec-punctuation"></select></div>
+          <div><label>数字</label><select id="spec-digits"></select></div>
+          <div><label>拉丁字母</label><select id="spec-letters"></select></div>
+          <div><label>引号</label><select id="spec-quotes"></select></div>
+          <div><label>省略号/破折号</label><select id="spec-ellipsis"></select></div>
+          <div><label>空白</label><select id="spec-whitespace"></select></div>
+          <div style="grid-column:1/-1">
+            <label>保护词表（专有名词 / 品牌 / 缩写，逗号分隔，命中片段不做任何转换）</label>
+            <input type="text" id="spec-protect" placeholder="例如：IBM, iPhone 15, GPU">
+          </div>
+          <div style="grid-column:1/-1">
+            <label>保护正则（每行一条，可选）</label>
+            <input type="text" id="spec-protect-regex" placeholder="例如：[A-Z]{2,}(?:-[A-Z]+)*">
+          </div>
+          <div style="grid-column:1/-1">
+            <label><input type="checkbox" id="spec-cjk-spaces" checked> 清除汉字之间的多余空白</label>
+          </div>
+        </div>
+
+        <div class="row mt">
+          <button class="btn secondary" id="btn-detect">仅识别语言</button>
+          <button class="btn" id="btn-normalize">识别并规范化</button>
+        </div>
+      </section>
+
+      <section class="card" id="detect-card" style="display:none">
+        <h2>语言识别</h2>
+        <div id="detect-doc" class="mb"></div>
+        <div id="detect-paras"></div>
+        <h3 class="mt">混合片段切分（黄=中文，蓝=英文，青=数字）</h3>
+        <div id="detect-segments" class="para-text output plain"></div>
+      </section>
+
+      <section class="card" id="plan-card" style="display:none">
+        <div class="toolbar">
+          <h2 style="margin:0;flex:1">逐段确认 <span class="muted small" id="plan-stat"></span></h2>
+          <button class="btn secondary small" id="btn-accept-all">全部接受</button>
+          <button class="btn secondary small" id="btn-reject-space">驳回全部空白改动</button>
+        </div>
+        <div class="muted small mb">点击正文中高亮的改动或下方按钮，可逐处「接受 / 驳回 / 改写」；驳回处保留原文。</div>
+        <div id="para-list"></div>
+        <div class="row mt">
+          <button class="btn" id="btn-confirm">生成规范文本并校验一致性</button>
+          <label><input type="checkbox" id="save-corpus"> 同时存为新语料</label>
+          <input type="text" id="save-name" placeholder="新语料名称（可选）" style="max-width:220px">
+        </div>
+      </section>
+
+      <section class="card" id="result-card" style="display:none">
+        <div class="toolbar">
+          <h2 style="margin:0;flex:1">规范文本 <span id="result-badge"></span></h2>
+          <button class="btn secondary small" id="btn-copy">复制</button>
+        </div>
+        <div class="norm-out" id="norm-out"></div>
+
+        <h3 class="mt">回流：用规范文本跑已有任务（口径一致）</h3>
+        <div class="row">
+          <button class="btn secondary small task-btn" data-task="segment">分词</button>
+          <button class="btn secondary small task-btn" data-task="sentiment">情感分析</button>
+          <button class="btn secondary small task-btn" data-task="ner">命名实体</button>
+          <button class="btn secondary small task-btn" data-task="keywords">关键词</button>
+        </div>
+        <div id="reflow-out" class="mt small muted">点击上方按钮查看规范文本的任务结果。</div>
+
+        <h3 class="mt">转换前后一致性校验</h3>
+        <div id="verify-out" class="muted small">尚未校验。</div>
+      </section>
+    </section>
+
+    <!-- ================= 批量 ================= -->
+    <section id="panel-batch" style="display:none">
+      <section class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;flex:1">批量规范化（分片语料，逐篇隔离）</h2>
+          <button class="btn secondary small" id="btn-reload-docs">刷新语料</button>
+          <button class="btn secondary small" id="btn-select-all">全选</button>
+        </div>
+        <div class="muted small mb">单篇失败或超时不会中断整批；可选把规范结果存为新语料（保留 source_corpus_id 关联）。</div>
+        <div id="doc-list" class="mt"></div>
+        <div class="row mt">
+          <label>超时(秒) <input type="number" id="batch-timeout" value="30" style="width:90px"></label>
+          <label>并发 <input type="number" id="batch-workers" value="4" style="width:80px"></label>
+          <label><input type="checkbox" id="batch-save"> 成功的存为新语料</label>
+          <button class="btn" id="btn-batch-run">开始批量规范化</button>
+        </div>
+        <div class="progress-bar" style="display:none" id="batch-bar-wrap"><div id="batch-bar" style="width:0"></div></div>
+        <div id="batch-summary" class="mt small muted"></div>
+        <div id="batch-results" class="mt"></div>
+      </section>
+    </section>
+  </main>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script>
+renderNav("normalize.html");
+
+let OPTIONS = null;
+let plan = null;
+let decisions = {};   // idx -> true / false / "自定义"
+
+/* ---------- 规范配置 ---------- */
+function fillSelect(id, items, def) {
+  const el = $(id);
+  el.innerHTML = items.map(o => `<option value="${esc(o.id)}"${o.id === def ? " selected" : ""}>${esc(o.name)}</option>`).join("");
+}
+async function loadOptions() {
+  OPTIONS = await api("/api/normalize/options");
+  fillSelect("#spec-script", OPTIONS.script, "simplified");
+  fillSelect("#spec-punctuation", OPTIONS.punctuation, "half");
+  fillSelect("#spec-digits", OPTIONS.digits, "half");
+  fillSelect("#spec-letters", OPTIONS.letters, "half");
+  fillSelect("#spec-quotes", OPTIONS.quotes, "keep");
+  fillSelect("#spec-ellipsis", OPTIONS.ellipsis, "collapse");
+  fillSelect("#spec-whitespace", OPTIONS.whitespace, "collapse");
+}
+function readSpec() {
+  const protect = $("#spec-protect").value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  const protectRegex = $("#spec-protect-regex").value.split(/\n/).map(s => s.trim()).filter(Boolean);
+  return {
+    script: $("#spec-script").value,
+    punctuation: $("#spec-punctuation").value,
+    digits: $("#spec-digits").value,
+    letters: $("#spec-letters").value,
+    quotes: $("#spec-quotes").value,
+    ellipsis: $("#spec-ellipsis").value,
+    whitespace: $("#spec-whitespace").value,
+    remove_cjk_spaces: $("#spec-cjk-spaces").checked,
+    protect, protect_regex: protectRegex,
+  };
+}
+
+/* ---------- 语料下拉 ---------- */
+async function loadCorpusSelect() {
+  const data = await api("/api/corpus");
+  $("#corpus-sel").innerHTML = '<option value="">— 从语料库选择 —</option>' +
+    data.corpora.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+}
+$("#corpus-sel").addEventListener("change", async e => {
+  const id = e.target.value;
+  if (!id) return;
+  const r = await api(`/api/corpus/${id}`);
+  $("#text").value = r.text;
+});
+
+/* ---------- Tab ---------- */
+$("#tab-single").onclick = () => switchTab("single");
+$("#tab-batch").onclick = () => switchTab("batch");
+function switchTab(name) {
+  $("#tab-single").classList.toggle("active", name === "single");
+  $("#tab-batch").classList.toggle("active", name === "batch");
+  $("#panel-single").style.display = name === "single" ? "" : "none";
+  $("#panel-batch").style.display = name === "batch" ? "" : "none";
+}
+
+const LANG_NAME = { zh: "中文", en: "英文", mixed: "中英混合", unknown: "未知" };
+const SCRIPT_NAME = { "zh-CN": "简体", "zh-TW": "繁体" };
+function langTag(lang, script) {
+  const s = script ? ` · ${esc(script.replace("zh-CN", "简体").replace("zh-TW", "繁体").replace("+mixed", "+繁简混"))}` : "";
+  return `<span class="lang-tag lang-${lang}">${LANG_NAME[lang] || lang}${s}</span>`;
+}
+
+/* ---------- 仅识别 ---------- */
+$("#btn-detect").onclick = async () => {
+  const text = $("#text").value.trim();
+  if (!text) return toast("请输入文本", "err");
+  const r = await api("/api/language/detect", { method: "POST", body: { text } });
+  $("#detect-card").style.display = "";
+  const l = r.language;
+  $("#detect-doc").innerHTML =
+    `<strong>篇章：</strong>${langTag(l.lang, l.script)}
+     <span class="muted small">汉字 ${l.cjk_chars} · 拉丁 ${l.latin_chars} · 数字 ${l.digit_chars}
+     · 繁体字形 ${l.trad_marks} · 简体字形 ${l.simp_marks} · 英文功能词 ${l.en_hits}</span>`;
+  $("#detect-paras").innerHTML = r.paragraphs.map((p, i) =>
+    `<div class="para-card"><div class="para-head"><strong>段落 ${i + 1}</strong>${langTag(p.lang, p.script)}
+      <span class="muted small">${p.text.length} 字</span></div>
+      <div class="para-text">${esc(p.text)}</div></div>`).join("");
+  $("#detect-segments").innerHTML = r.segments.map(s => {
+    const cls = s.type === "zh" ? "seg-zh" : s.type === "en" ? "seg-en"
+              : s.type === "number" ? "seg-number" : "";
+    return cls ? `<span class="${cls}">${esc(s.text)}</span>` : esc(s.text);
+  }).join("");
+};
+
+/* ---------- 规范化 ---------- */
+$("#btn-normalize").onclick = async () => {
+  const text = $("#text").value;
+  if (!text.trim()) return toast("请输入文本", "err");
+  const btn = $("#btn-normalize");
+  setLoading(btn, true, "规范化中…");
+  try {
+    plan = await api("/api/normalize", { method: "POST", body: { text, spec: readSpec() } });
+    decisions = {};
+    renderPlan();
+    $("#plan-card").style.display = "";
+    $("#result-card").style.display = "none";
+    $("#plan-card").scrollIntoView({ behavior: "smooth" });
+  } catch (e) { toast(e.message, "err"); }
+  setLoading(btn, false);
+};
+
+function decisionOf(idx) { return Object.prototype.hasOwnProperty.call(decisions, idx) ? decisions[idx] : true; }
+
+function renderParaHighlights(p) {
+  // 用该段变更（局部偏移）渲染高亮原文
+  const chgs = p.changes.slice().sort((a, b) => a.start - b.start);
+  let html = "", cursor = 0;
+  for (const c of chgs) {
+    html += esc(p.text.slice(cursor, c.start));
+    const dec = decisionOf(c.idx);
+    const cls = "chg" + (dec === false ? " rejected" : (dec === true ? "" : " accepted-manual"));
+    const shown = dec === false ? esc(c.original)
+                : dec === true ? esc(c.replacement)
+                : esc(dec);
+    html += `<span class="${cls}" data-idx="${c.idx}" title="${esc(c.reason)}：${esc(c.original)} → ${esc(c.replacement)}">${shown}</span>`;
+    cursor = c.end;
+  }
+  html += esc(p.text.slice(cursor));
+  return html;
+}
+
+function renderPlan() {
+  const total = plan.changes.length;
+  $("#plan-stat").textContent =
+    `共 ${total} 处改动 · ${Object.entries(plan.stats.by_kind).map(([k, v]) => `${OPTIONS.change_reasons[k] || k} ${v}`).join("、")}`;
+  $("#para-list").innerHTML = plan.paragraphs.map(p => {
+    const rows = p.changes.map(c => {
+      const dec = decisionOf(c.idx);
+      return `<div class="change-row">
+        <span class="kind">${esc(c.reason)}</span>
+        <span class="chg-pill">${esc(c.original) || "<空白>"}</span><span class="arrow">→</span>
+        <span class="chg-pill">${esc(c.replacement) || "<删除>"}</span>
+        <span style="flex:1"></span>
+        <button class="btn small ${dec === true ? "" : "secondary"}" data-act="accept" data-idx="${c.idx}">接受</button>
+        <button class="btn small ${dec === false ? "danger" : "secondary"}" data-act="reject" data-idx="${c.idx}">驳回</button>
+        <input type="text" placeholder="改写" value="${dec !== true && dec !== false ? esc(dec) : ""}" data-act="edit" data-idx="${c.idx}">
+      </div>`;
+    }).join("");
+    return `<div class="para-card">
+      <div class="para-head"><strong>段落 ${p.idx + 1}</strong>${langTag(p.lang, p.script)}
+        <span class="badge blue small">${p.changes.length} 处改动</span></div>
+      <div class="para-text">${renderParaHighlights(p)}</div>
+      ${rows ? `<div class="change-list">${rows}</div>` : '<div class="muted small mt">本段无需改动。</div>'}
+    </div>`;
+  }).join("");
+
+  $("#para-list").querySelectorAll("button[data-act]").forEach(b => {
+    b.onclick = () => {
+      const idx = +b.dataset.idx;
+      if (b.dataset.act === "accept") decisions[idx] = true;
+      if (b.dataset.act === "reject") decisions[idx] = false;
+      renderPlan();
+    };
+  });
+  $("#para-list").querySelectorAll("input[data-act=edit]").forEach(inp => {
+    inp.onchange = () => { decisions[+inp.dataset.idx] = inp.value; renderPlan(); };
+  });
+}
+
+$("#btn-accept-all").onclick = () => { decisions = {}; renderPlan(); };
+$("#btn-reject-space").onclick = () => {
+  plan.changes.filter(c => c.kind === "space").forEach(c => { decisions[c.idx] = false; });
+  renderPlan();
+};
+
+/* ---------- 确认 ---------- */
+$("#btn-confirm").onclick = async () => {
+  const btn = $("#btn-confirm");
+  setLoading(btn, true, "重建文本…");
+  try {
+    const payload = {
+      plan, decisions,
+      save_as_corpus: $("#save-corpus").checked,
+      name: $("#save-name").value.trim(),
+      verify: true,
+    };
+    const r = await api("/api/normalize/confirm", { method: "POST", body: payload });
+    $("#result-card").style.display = "";
+    $("#norm-out").textContent = r.normalized;
+    $("#result-badge").innerHTML =
+      `<span class="badge green small">接受 ${r.stats.accepted}</span>
+       <span class="badge red small">驳回 ${r.stats.rejected}</span>
+       <span class="badge blue small">改写 ${r.stats.edited}</span>` +
+      (r.saved_corpus_id ? ` <span class="badge green small">已存为语料 ${esc(r.saved_corpus_id)}</span>` : "");
+    renderVerify(r.consistency);
+    $("#result-card").scrollIntoView({ behavior: "smooth" });
+    window._finalNormalized = r.normalized;
+  } catch (e) { toast(e.message, "err"); }
+  setLoading(btn, false);
+};
+
+function renderVerify(v) {
+  if (!v) return;
+  $("#verify-out").innerHTML =
+    `<div class="check-row"><strong class="${v.consistent ? "" : ""}">${v.consistent ?
+      '<span class="badge green">语义口径一致</span>' : '<span class="badge amber">存在口径差异（详见下方）</span>'}</strong></div>` +
+    v.checks.map(c => {
+      const d = c.detail;
+      let extra = "";
+      if (c.task === "sentiment")
+        extra = `极性 ${d.polarity_before} → ${d.polarity_after}，分值漂移 ${d.score_drift}`;
+      else if (c.task === "ner")
+        extra = `仅原文有: [${d.only_before.join(", ")}] 仅规范后有: [${d.only_after.join(", ")}]`
+              + (d.type_mismatch.length ? `；类型变化: ${d.type_mismatch.join("; ")}` : "");
+      else if (c.task === "segment")
+        extra = `词数 ${d.tokens_before} → ${d.tokens_after}，内容字符 ${d.content_chars_before} → ${d.content_chars_after}`
+              + ((d.token_boundary_diff.missing && Object.keys(d.token_boundary_diff.missing).length)
+                  ? `；切分参考差异 ${JSON.stringify(d.token_boundary_diff)}` : "");
+      else if (c.task === "form")
+        extra = `字符 ${d.chars_before} → ${d.chars_after}，段落 ${d.paragraphs_before} → ${d.paragraphs_after}`;
+      return `<div class="check-row">
+        <span class="badge ${c.consistent ? "green" : "amber"}">${c.consistent ? "一致" : "差异"}</span>
+        <strong>${esc(c.name)}</strong><span class="check-detail">${esc(extra)}</span></div>`;
+    }).join("");
+}
+
+$("#btn-copy").onclick = () => {
+  navigator.clipboard.writeText(window._finalNormalized || "");
+  toast("已复制");
+};
+
+/* ---------- 回流任务 ---------- */
+document.querySelectorAll(".task-btn").forEach(b => {
+  b.onclick = async () => {
+    const text = window._finalNormalized;
+    if (!text) return toast("请先生成规范文本", "err");
+    const task = b.dataset.task;
+    $("#reflow-out").className = "mt small muted";
+    $("#reflow-out").textContent = "分析中…";
+    const r = await api(`/api/${task}`, { method: "POST", body: { text } });
+    let html = "";
+    if (task === "segment")
+      html = r.words.map(w => `<span class="token"><span class="t-word">${esc(w)}</span></span>`).join("");
+    else if (task === "sentiment")
+      html = `<span class="badge ${r.polarity === "positive" ? "green" : r.polarity === "negative" ? "red" : ""}">${esc(r.polarity_name)}</span>
+              分值 ${r.score}，置信度 ${r.confidence}`;
+    else if (task === "ner")
+      html = (r.entities || []).map(e =>
+        `<span class="ent-${e.type}">${esc(e.text)}</span> <span class="muted small">${esc(r.entity_type_names[e.type] || e.type)}</span><br>`).join("")
+        || '<span class="muted">未识别到实体</span>';
+    else if (task === "keywords")
+      html = `<div class="keyword-cloud">${r.keywords.map(k =>
+        `<span class="keyword-chip">${esc(k.word)}<span class="score">${k.score.toFixed(3)}</span></span>`).join("")}</div>`;
+    $("#reflow-out").className = "mt small";
+    $("#reflow-out").innerHTML = html;
+  };
+});
+
+/* ---------- 批量 ---------- */
+let docs = [];
+async function loadDocs() {
+  const data = await api("/api/corpus");
+  docs = data.corpora;
+  $("#doc-list").innerHTML = docs.length ? docs.map(c =>
+    `<label class="doc-row"><input type="checkbox" class="doc-chk" value="${esc(c.id)}">
+      <span class="grow"><strong>${esc(c.name)}</strong>
+      <span class="muted small"> · ${c.length} 字 · ${esc(c.id)}</span></span></label>`).join("")
+    : '<div class="muted">暂无语料</div>';
+}
+$("#btn-reload-docs").onclick = loadDocs;
+$("#btn-select-all").onclick = () => {
+  const chks = document.querySelectorAll(".doc-chk");
+  const allOn = Array.from(chks).every(c => c.checked);
+  chks.forEach(c => c.checked = !allOn);
+};
+$("#btn-batch-run").onclick = async () => {
+  const ids = Array.from(document.querySelectorAll(".doc-chk:checked")).map(c => c.value);
+  if (!ids.length) return toast("请选择至少一篇语料", "err");
+  const btn = $("#btn-batch-run");
+  setLoading(btn, true, "批量处理中…");
+  $("#batch-bar-wrap").style.display = "";
+  $("#batch-bar").style.width = "0";
+  $("#batch-summary").textContent = `已提交 ${ids.length} 篇，处理中（接口等待整批完成）…`;
+  try {
+    const r = await api("/api/normalize/batch", {
+      method: "POST",
+      body: {
+        corpus_ids: ids, spec: readSpec(),
+        max_workers: +$("#batch-workers").value,
+        timeout: +$("#batch-timeout").value,
+        save: $("#batch-save").checked,
+      },
+    });
+    $("#batch-bar").style.width = "100%";
+    $("#batch-summary").innerHTML =
+      `<span class="badge green">成功 ${r.succeeded}</span>
+       <span class="badge ${r.failed ? "red" : ""}">失败 ${r.failed}</span>
+       <span class="muted"> 共 ${r.doc_count} 篇 · 批次 ${esc(r.run_id)}</span>`;
+    const detail = await api(`/api/normalize/batch/${r.run_id}`);
+    $("#batch-results").innerHTML = detail.results.map(x => `
+      <div class="doc-row">
+        <span class="badge ${x.ok ? "green" : "red"}">${x.ok ? "成功" : "失败"}</span>
+        <span class="grow"><strong>${esc(x.name || x.id)}</strong>
+          <span class="muted small">${x.ok ? esc((x.normalized || "").slice(0, 100)) : esc(x.error)}</span></span>
+        ${x.warning ? `<span class="badge amber">${esc(x.warning)}</span>` : ""}
+      </div>`).join("");
+  } catch (e) { toast(e.message, "err"); }
+  setLoading(btn, false);
+};
+
+loadOptions().then(loadCorpusSelect);
+loadDocs();
+</script>
+</body>
+</html>
