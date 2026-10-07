@@ -16,16 +16,24 @@ from .summarizer import Summarizer
 from .translator import Translator
 from .keywords import KeywordExtractor
 from .embeddings import WordEmbeddings
+from .variants import ChineseConverter, get_converter
+from .langid import detect_language, split_languages
+from .normalize import (TextNormalizer, NormalizeConfig, NormalizeResult,
+                        apply_revisions, CHANGE_RULE_NAMES)
+from .consistency import run_consistency_checks
 from . import lexicon, text, hmm
 
 __all__ = [
     "Segmenter", "POSTagger", "DependencyParser", "ConstituencyParser",
     "NERExtractor", "SentimentAnalyzer", "Summarizer", "Translator",
     "KeywordExtractor", "WordEmbeddings",
+    "ChineseConverter", "TextNormalizer", "NormalizeConfig", "NormalizeResult",
     "TAG_NAMES", "TAGSET", "DEP_REL_NAMES", "PHRASE_NAMES", "ENTITY_TYPE_NAMES",
     "POLARITY_NAMES", "lexicon", "text", "hmm",
     "get_segmenter", "get_tagger", "get_parser", "get_ner", "get_sentiment",
     "get_summarizer", "get_translator", "get_keywords", "get_embeddings",
+    "get_converter", "get_normalizer", "detect_language", "split_languages",
+    "apply_revisions", "run_consistency_checks", "CHANGE_RULE_NAMES",
 ]
 
 
@@ -78,3 +86,7 @@ def get_keywords() -> KeywordExtractor:
 
 def get_embeddings() -> WordEmbeddings:
     return _singleton("embeddings", WordEmbeddings)
+
+
+def get_normalizer() -> TextNormalizer:
+    return _singleton("normalizer", TextNormalizer)

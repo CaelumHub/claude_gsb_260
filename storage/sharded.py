@@ -207,6 +207,30 @@ class ShardedStore:
                     return record
         return None
 
+    def update(self, record_id: str, updates: dict) -> Optional[dict]:
+        """浅合并更新一条记录（不存在返回 None）。
+
+        与 :meth:`insert` 一样走「定位分片 -> 读-改-写 -> 原子替换」，
+        供批量任务高频刷新进度使用。
+        """
+        if not isinstance(updates, dict):
+            raise TypeError("updates 必须是 dict")
+        with FileLock(lock_path_for(self.meta_path)):
+            meta = self._read_meta()
+            for index in range(meta.get("shard_count", 0)):
+                path = self._shard_path(index)
+                with FileLock(lock_path_for(path)):
+                    records = self._read_shard(index)
+                    for i, record in enumerate(records):
+                        if record.get("id") == record_id and not record.get("_deleted"):
+                            merged = dict(record)
+                            merged.update(updates)
+                            merged["id"] = record_id
+                            records[i] = merged
+                            self._write_shard(index, records)
+                            return merged
+        return None
+
     def query(self, where: Optional[list] = None,
               order_by: Optional[str] = None,
               order: str = "asc",

@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>语言识别与规范化 - NLP 流水线平台</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .lang-zh { background: #e7f0ff; color: #1d4ed8; padding: 0 3px; border-radius: 4px; }
+    .lang-en { background: #e8f8ef; color: #15803d; padding: 0 3px; border-radius: 4px; }
+    .lang-ja { background: #fdeedd; color: #c2410c; padding: 0 3px; border-radius: 4px; }
+    .lang-ko { background: #f3e8ff; color: #7e22ce; padding: 0 3px; border-radius: 4px; }
+    .lang-symbols, .lang-digits { color: var(--text-muted); }
+    .lang-tag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+    .tag-zh { background: #dbeafe; color: #1d4ed8; }
+    .tag-en { background: #dcfce7; color: #15803d; }
+    .tag-ja { background: #ffedd5; color: #c2410c; }
+    .tag-ko { background: #f3e8ff; color: #7e22ce; }
+    .tag-other { background: #e5e7eb; color: #4b5563; }
+    .change-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px;
+      border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+    .change-row.rejected { opacity: .45; background: #fafafa; }
+    .change-rule { font-size: 11px; color: #6b7280; min-width: 72px; }
+    .change-arrow { color: #9ca3af; margin: 0 2px; }
+    .change-old { color: #b91c1c; text-decoration: line-through; word-break: break-all; }
+    .change-new { color: #15803d; word-break: break-all; }
+    .change-actions { margin-left: auto; display: flex; gap: 4px; flex-shrink: 0; }
+    .mini-btn { font-size: 12px; padding: 2px 10px; border-radius: 6px; cursor: pointer;
+      border: 1px solid #d1d5db; background: #fff; }
+    .mini-btn.on-accept { background: #16a34a; color: #fff; border-color: #16a34a; }
+    .mini-btn.on-reject { background: #dc2626; color: #fff; border-color: #dc2626; }
+    .para-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+    .preview-box { white-space: pre-wrap; word-break: break-word; line-height: 1.9;
+      background: #f9fafb; border-radius: 8px; padding: 10px; font-size: 14px; }
+    .ratio-bar { height: 8px; border-radius: 4px; background: #e5e7eb; overflow: hidden;
+      display: flex; margin: 6px 0; }
+    .ratio-bar span { height: 100%; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px; margin: 8px 0; }
+    .stat-box { background: #f9fafb; border-radius: 8px; padding: 10px; }
+    .stat-box .v { font-size: 20px; font-weight: 700; }
+    .stat-box .k { font-size: 12px; color: var(--text-muted); }
+    .check-row { display: flex; align-items: center; gap: 8px; padding: 8px;
+      border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+    .check-ok { background: #f0fdf4; }
+    .check-bad { background: #fef2f2; }
+    .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px; }
+    .config-grid label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 3px; }
+    select, input[type=text] { width: 100%; }
+    .doc-row { display: flex; align-items: center; gap: 8px; padding: 8px;
+      border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+    .progress-wrap { height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden; }
+    .progress-wrap .pf { height: 100%; background: #2563eb; transition: width .3s; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="site-sidebar"></aside>
+
+  <main class="main">
+    <h1 class="page-title">语言识别与规范化</h1>
+    <p class="page-desc">自动识别中英混排文本的主语言与分段；全角/半角、繁/简、数字与空白按目标规范统一，分段落逐处确认，不改变原意。</p>
+
+    <!-- 输入 -->
+    <section class="card">
+      <div class="toolbar">
+        <h2 style="margin:0;flex:1">输入文本</h2>
+        <select id="corpus-select" style="max-width:260px">
+          <option value="">— 或从语料库选择 —</option>
+        </select>
+      </div>
+      <textarea id="text" style="min-height:130px" placeholder="在此粘贴中英混排、繁简混排、全半角混用的文本…">Hello，這裡是　ＧＰＵ　集群（2024年）！
+IBM成立於１９１１年，總部在紐約。乾杯麵很好吃，我非常喜歡這裡的產品。</textarea>
+
+      <div class="config-grid mt">
+        <div>
+          <label>繁简目标</label>
+          <select id="cfg-variant">
+            <option value="simplified" selected>转简体</option>
+            <option value="traditional">转繁体</option>
+            <option value="keep">维持原样</option>
+          </select>
+        </div>
+        <div>
+          <label>标点</label>
+          <select id="cfg-punct">
+            <option value="half" selected>全角标点 → 半角</option>
+            <option value="full">半角标点 → 全角</option>
+            <option value="keep">不处理</option>
+          </select>
+        </div>
+        <div>
+          <label>数字</label>
+          <select id="cfg-digits">
+            <option value="half" selected>全角数字 → 半角</option>
+            <option value="full">半角数字 → 全角</option>
+            <option value="keep">不处理</option>
+          </select>
+        </div>
+        <div>
+          <label>拉丁字母</label>
+          <select id="cfg-letters">
+            <option value="half" selected>全角字母 → 半角</option>
+            <option value="full">半角字母 → 全角</option>
+            <option value="keep">不处理</option>
+          </select>
+        </div>
+        <div>
+          <label>空白</label>
+          <select id="cfg-spaces">
+            <option value="collapse" selected>连续空白折叠</option>
+            <option value="single">全角空格转半角</option>
+            <option value="keep">不处理</option>
+          </select>
+        </div>
+        <div>
+          <label>中英文之间</label>
+          <select id="cfg-cjkspace">
+            <option value="false" selected>不补空格</option>
+            <option value="true">补一个空格</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="config-grid mt">
+        <div style="grid-column:1/-1">
+          <label>受保护专名 / 缩写（逗号分隔，规范化时原样保留；英文缩写 GPU、U.S.A. 与拉丁实体默认自动保护）</label>
+          <input type="text" id="cfg-protected" placeholder="例如：OpenAI, iPhone 15, COVID-19">
+        </div>
+        <div><label><input type="checkbox" id="cfg-quotes"> 弯引号统一为直引号</label></div>
+        <div><label><input type="checkbox" id="cfg-zerowidth" checked> 删除零宽 / BOM 字符</label></div>
+        <div><label><input type="checkbox" id="cfg-linebreak" checked> 换行符统一为 LF</label></div>
+      </div>
+
+      <div class="toolbar mt">
+        <button class="btn secondary" id="btn-langid">仅识别语言</button>
+        <button class="btn" id="btn-normalize">识别 + 规范化</button>
+      </div>
+    </section>
+
+    <!-- 语言识别结果 -->
+    <section class="card" id="langid-card" style="display:none">
+      <h2>语言识别</h2>
+      <div id="langid-summary"></div>
+      <h3 class="mt">混合文本分段</h3>
+      <div id="langid-spans" class="preview-box"></div>
+    </section>
+
+    <!-- 规范化结果：分段落逐处确认 -->
+    <section class="card" id="result-card" style="display:none">
+      <div class="toolbar">
+        <h2 style="margin:0;flex:1">规范化结果 · 逐处确认</h2>
+        <button class="btn secondary small" id="btn-accept-all">全部接受</button>
+        <button class="btn secondary small" id="btn-reject-all">全部拒绝</button>
+      </div>
+      <div id="paragraphs"></div>
+
+      <h3 class="mt">确认后的文本（可手动微调）</h3>
+      <textarea id="final-text" style="min-height:110px"></textarea>
+      <div class="toolbar mt">
+        <button class="btn secondary" id="btn-consistency">校验下游任务口径</button>
+        <button class="btn" id="btn-save">存为新语料（回流分词/情感等）</button>
+      </div>
+      <div id="consistency" class="mt"></div>
+    </section>
+
+    <!-- 批量处理 -->
+    <section class="card">
+      <h2>批量规范化（分片语料，单篇失败不阻塞整批）</h2>
+      <div class="toolbar">
+        <button class="btn secondary" id="btn-batch-load">刷新语料列表</button>
+        <button class="btn" id="btn-batch-run">批量处理全部语料</button>
+        <span class="muted small" id="batch-hint"></span>
+      </div>
+      <div id="batch-progress" class="mt" style="display:none">
+        <div class="progress-wrap"><div class="pf" id="batch-pf" style="width:0%"></div></div>
+        <div class="small muted mt" id="batch-status"></div>
+      </div>
+      <div id="batch-docs" class="mt"></div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script>
+renderNav("normalize.html");
+
+let state = { result: null, corpora: [] };
+
+/* ---------- 配置收集 ---------- */
+function collectConfig() {
+  return {
+    variant: $("#cfg-variant").value,
+    punct: $("#cfg-punct").value,
+    digits: $("#cfg-digits").value,
+    letters: $("#cfg-letters").value,
+    spaces: $("#cfg-spaces").value,
+    space_cjk_latin: $("#cfg-cjkspace").value === "true",
+    normalize_quotes: $("#cfg-quotes").checked,
+    remove_zero_width: $("#cfg-zerowidth").checked,
+    normalize_linebreak: $("#cfg-linebreak").checked,
+    protected_terms: $("#cfg-protected").value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+  };
+}
+
+/* ---------- 语料下拉 ---------- */
+async function loadCorpora(selectAll = false) {
+  const data = await api("/api/corpus");
+  state.corpora = data.corpora;
+  $("#corpus-select").innerHTML =
+    '<option value="">— 或从语料库选择 —</option>' +
+    state.corpora.map(c => `<option value="${esc(c.id)}">${esc(c.name)}（${c.length}字）</option>`).join("");
+}
+$("#corpus-select").addEventListener("change", async () => {
+  const id = $("#corpus-select").value;
+  if (!id) return;
+  const r = await api(`/api/corpus/${id}`);
+  $("#text").value = r.text;
+});
+
+/* ---------- 语言识别 ---------- */
+const LANG_CLS = { zh: "lang-zh", en: "lang-en", ja: "lang-ja", ko: "lang-ko",
+                   digits: "lang-digits", symbols: "lang-symbols", unknown: "" };
+const LANG_TAG_CLS = { zh: "tag-zh", en: "tag-en", ja: "tag-ja", ko: "tag-ko" };
+
+function renderSpans(spans) {
+  return spans.map(s =>
+    `<span class="${LANG_CLS[s.lang] || ""}">${esc(s.text)}</span>`).join("");
+}
+
+async function doLangid() {
+  const text = $("#text").value;
+  if (!text.trim()) return toast("请输入文本", "err");
+  const btn = $("#btn-langid");
+  setLoading(btn, true, "识别中…");
+  try {
+    const r = await api("/api/langid", { method: "POST", body: { text } });
+    $("#langid-card").style.display = "";
+    const ratioColors = { zh: "#2563eb", en: "#16a34a", ja: "#ea580c", ko: "#9333ea",
+                          digits: "#9ca3af", symbols: "#d1d5db", space: "transparent" };
+    const ratioBar = Object.entries(r.ratios)
+      .filter(([k, v]) => v > 0).map(([k, v]) =>
+        `<span style="width:${(v * 100).toFixed(1)}%;background:${ratioColors[k] || "#ccc"}" title="${k} ${(v*100).toFixed(1)}%"></span>`).join("");
+    const variant = r.language === "zh" && r.chinese_variant !== "unknown"
+      ? ` · <span class="badge blue small">${ {simplified:"简体",traditional:"繁体",mixed:"简繁混合"}[r.chinese_variant] || "" }</span>` : "";
+    $("#langid-summary").innerHTML = `
+      <div class="stat-grid">
+        <div class="stat-box"><div class="v">${esc(r.language_name)}</div><div class="k">主语言${variant}</div></div>
+        <div class="stat-box"><div class="v">${(r.confidence * 100).toFixed(0)}%</div><div class="k">有效字符置信度</div></div>
+        <div class="stat-box"><div class="v">${r.spans.length}</div><div class="k">语言段数量</div></div>
+        <div class="stat-box"><div class="v">${r.effective_chars}</div><div class="k">有效字符数</div></div>
+      </div>
+      <div class="ratio-bar">${ratioBar}</div>
+      <div class="small muted">蓝=中文 绿=英文 橙=日文 紫=韩文 灰=数字/符号</div>`;
+    $("#langid-spans").innerHTML = renderSpans(r.spans);
+  } catch (e) { toast(e.message, "err"); }
+  setLoading(btn, false);
+}
+$("#btn-langid").addEventListener("click", doLangid);
+
+/* ---------- 规范化 + 逐处确认 ---------- */
+async function doNormalize() {
+  const text = $("#text").value;
+  if (!text.trim()) return toast("请输入文本", "err");
+  const btn = $("#btn-normalize");
+  setLoading(btn, true, "规范化中…");
+  try {
+    const r = await api("/api/normalize", {
+      method: "POST", body: { text, config: collectConfig() } });
+    state.result = r;
+    $("#result-card").style.display = "";
+    renderResult();
+    // 同时刷新语言识别卡
+    doLangid();
+  } catch (e) { toast(e.message, "err"); }
+  setLoading(btn, false);
+}
+$("#btn-normalize").addEventListener("click", doNormalize);
+
+function renderResult() {
+  const r = state.result;
+  $("#paragraphs").innerHTML = r.paragraphs.map(p => {
+    const tagCls = LANG_TAG_CLS[p.language] || "tag-other";
+    const variant = p.language === "zh" && p.chinese_variant !== "unknown"
+      ? ` · <span class="badge small ${p.chinese_variant === "traditional" ? "amber" : "blue"}">${ {simplified:"简体",traditional:"繁体",mixed:"简繁混合"}[p.chinese_variant] }</span>` : "";
+    if (!p.changes.length) {
+      return `<div class="mb">
+        <div class="para-head"><span class="lang-tag ${tagCls}">第 ${p.index + 1} 段 · ${esc(p.language_name)}${variant}</span>
+        <span class="badge small">无需改动</span></div>
+        <div class="preview-box">${esc(p.original)}</div>
+      </div>`;
+    }
+    const rows = p.changes.map((c, ci) => `
+      <div class="change-row" data-p="${p.index}" data-c="${ci}" id="chg-${p.index}-${ci}">
+        <span class="change-rule">${esc(c.rule_name)}</span>
+        <span class="change-old">${esc(c.original) || "(空)"}</span>
+        <span class="change-arrow">→</span>
+        <span class="change-new">${esc(c.changed) || "(删除)"}</span>
+        <span class="change-actions">
+          <button class="mini-btn on-accept" data-act="accept">接受</button>
+          <button class="mini-btn" data-act="reject">拒绝</button>
+        </span>
+      </div>`).join("");
+    return `<div class="mb">
+      <div class="para-head">
+        <span class="lang-tag ${tagCls}">第 ${p.index + 1} 段 · ${esc(p.language_name)}${variant}</span>
+        <span class="badge blue small">${p.changes.length} 处改动</span>
+      </div>
+      ${rows}
+      <div class="small muted mt">该段确认结果：</div>
+      <div class="preview-box" id="para-preview-${p.index}"></div>
+    </div>`;
+  }).join("");
+
+  // 绑定接受 / 拒绝
+  $$("#paragraphs .change-row").forEach(row => {
+    row.querySelectorAll(".mini-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const pi = +row.dataset.p, ci = +row.dataset.c;
+        const chg = state.result.paragraphs[pi].changes[ci];
+        chg.accepted = btn.dataset.act === "accept";
+        syncRowButtons(row, chg.accepted);
+        refreshParagraph(pi);
+        refreshFinal();
+      });
+    });
+  });
+  r.paragraphs.forEach((_, pi) => refreshParagraph(pi));
+  refreshFinal();
+}
+
+function syncRowButtons(row, accepted) {
+  row.classList.toggle("rejected", !accepted);
+  const [a, r] = row.querySelectorAll(".mini-btn");
+  a.className = "mini-btn " + (accepted ? "on-accept" : "");
+  r.className = "mini-btn " + (!accepted ? "on-reject" : "");
+}
+
+/* 按当前接受状态重建某段文本（前端本地计算，与后端 apply 同口径） */
+function rebuildParagraph(p) {
+  const accepted = p.changes.filter(c => c.accepted)
+    .slice().sort((a, b) => a.start - b.start);
+  let out = "", cursor = 0;
+  for (const c of accepted) {
+    if (c.start < cursor) continue;
+    out += p.original.slice(cursor, c.start) + c.changed;
+    cursor = c.end;
+  }
+  out += p.original.slice(cursor);
+  return out;
+}
+
+function refreshParagraph(pi) {
+  const p = state.result.paragraphs[pi];
+  const box = $(`#para-preview-${pi}`);
+  if (box) box.textContent = rebuildParagraph(p);
+}
+
+function refreshFinal() {
+  // 整篇坐标与段落内坐标一致（按换行切分，偏移已含换行），用整篇原文重建
+  const r = state.result;
+  const all = r.paragraphs.flatMap(p => p.changes);
+  const accepted = all.filter(c => c.accepted).slice().sort((a, b) => a.start - b.start);
+  let out = "", cursor = 0;
+  for (const c of accepted) {
+    if (c.start < cursor) continue;
+    out += r.original.slice(cursor, c.start) + c.changed;
+    cursor = c.end;
+  }
+  out += r.original.slice(cursor);
+  $("#final-text").value = out;
+}
+
+$("#btn-accept-all").addEventListener("click", () => {
+  state.result.paragraphs.forEach(p => p.changes.forEach(c => c.accepted = true));
+  $$("#paragraphs .change-row").forEach(row => syncRowButtons(row, true));
+  state.result.paragraphs.forEach((_, pi) => refreshParagraph(pi));
+  refreshFinal();
+  toast("已全部接受");
+});
+$("#btn-reject-all").addEventListener("click", () => {
+  state.result.paragraphs.forEach(p => p.changes.forEach(c => c.accepted = false));
+  $$("#paragraphs .change-row").forEach(row => syncRowButtons(row, false));
+  state.result.paragraphs.forEach((_, pi) => refreshParagraph(pi));
+  refreshFinal();
+  toast("已全部拒绝（恢复原文）");
+});
+
+/* ---------- 一致性校验 ---------- */
+$("#btn-consistency").addEventListener("click", async () => {
+  if (!state.result) return;
+  const box = $("#consistency");
+  box.innerHTML = '<div class="muted small">校验中…</div>';
+  try {
+    const r = await api("/api/normalize/consistency", {
+      method: "POST",
+      body: { original: state.result.original, normalized: $("#final-text").value,
+              tasks: ["segment", "sentiment"] } });
+    box.innerHTML = `<div class="small muted mb">规范化前后在下游任务上的口径对比：</div>` +
+      r.checks.map(c => `
+      <div class="check-row ${c.consistent ? "check-ok" : "check-bad"}">
+        <strong>${c.consistent ? "✓" : "✗"}</strong>
+        <span style="flex:1"><strong>${esc(c.task_name)}</strong>：${esc(c.detail)}</span>
+        <span class="small muted">${esc(JSON.stringify(c).replace(/[{}"]/g, "").slice(0, 80))}</span>
+      </div>`).join("") +
+      `<div class="small mt">总体口径：${r.consistent
+        ? '<span style="color:#16a34a;font-weight:700">一致</span>'
+        : '<span style="color:#dc2626;font-weight:700">存在漂移，请人工复核</span>'}</div>`;
+  } catch (e) { box.innerHTML = ""; toast(e.message, "err"); }
+});
+
+/* ---------- 存回语料 ---------- */
+$("#btn-save").addEventListener("click", async () => {
+  if (!state.result) return;
+  const changes = state.result.paragraphs.flatMap(p =>
+    p.changes.map(c => ({ start: c.start, end: c.end, changed: c.changed,
+                         accepted: c.accepted })));
+  try {
+    const r = await api("/api/normalize/apply", {
+      method: "POST",
+      body: { original: state.result.original, changes,
+              accepted_text: $("#final-text").value, save_as_corpus: true,
+              corpus_id: state.result.corpus_id } });
+    toast(`已存为新语料：${r.corpus_id}`);
+    loadCorpora();
+  } catch (e) { toast(e.message, "err"); }
+});
+
+/* ---------- 批量处理 ---------- */
+let pollTimer = null;
+async function refreshBatchList() {
+  const data = await api("/api/corpus");
+  state.corpora = data.corpora;
+  $("#batch-hint").textContent = `共 ${state.corpora.length} 篇语料`;
+}
+$("#btn-batch-load").addEventListener("click", refreshBatchList);
+
+$("#btn-batch-run").addEventListener("click", async () => {
+  const btn = $("#btn-batch-run");
+  setLoading(btn, true, "提交中…");
+  try {
+    const job = await api("/api/normalize/batch", {
+      method: "POST", body: { config: collectConfig(), max_workers: 4, timeout: 20 } });
+    toast(`批量任务已提交：${job.total} 篇`);
+    pollBatch(job.job_id);
+  } catch (e) { toast(e.message, "err"); }
+  setLoading(btn, false);
+});
+
+function pollBatch(jobId) {
+  clearInterval(pollTimer);
+  $("#batch-progress").style.display = "";
+  pollTimer = setInterval(async () => {
+    try {
+      const r = await api(`/api/normalize/batch/${jobId}`);
+      const pct = r.total ? Math.round(r.done / r.total * 100) : 0;
+      $("#batch-pf").style.width = pct + "%";
+      $("#batch-status").textContent =
+        `${r.status} · ${r.done}/${r.total}（成功 ${r.succeeded} / 失败 ${r.failed}）`;
+      renderBatchDocs(r.documents);
+      if (r.status === "finished") {
+        clearInterval(pollTimer);
+        if (r.failed) toast(`完成，但有 ${r.failed} 篇失败，已跳过`, "err");
+        else toast("批量规范化全部完成");
+      }
+    } catch (e) { clearInterval(pollTimer); toast(e.message, "err"); }
+  }, 700);
+}
+
+function renderBatchDocs(docs) {
+  if (!docs || !docs.length) return;
+  $("#batch-docs").innerHTML = docs.map(d => {
+    const status = d.ok === null ? '<span class="muted small">等待中</span>'
+      : d.ok ? '<span style="color:#16a34a">✓</span>'
+             : `<span style="color:#dc2626" title="${esc(d.error || "")}">✗ 失败</span>`;
+    return `<div class="doc-row">
+      <span style="flex:1">${esc(d.name || d.corpus_id || "")}</span>
+      ${d.ok ? `<span class="badge blue small">${d.change_count || 0} 处</span>` : ""}
+      ${status}
+    </div>`;
+  }).join("");
+}
+
+loadCorpora();
+refreshBatchList();
+</script>
+</body>
+</html>

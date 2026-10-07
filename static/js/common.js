@@ -4,6 +4,7 @@
 
 const PAGES = [
   { file: "corpus.html",    name: "语料库管理",   desc: "上传与清洗" },
+  { file: "normalize.html", name: "语言识别与规范化", desc: "中英混排 · 繁简全半角" },
   { file: "segment.html",   name: "分词与词性标注", desc: "切词 + POS" },
   { file: "parse.html",     name: "句法分析树",   desc: "依存 / 成分树" },
   { file: "ner.html",       name: "命名实体识别", desc: "NER 与标注" },
@@ -16,7 +17,8 @@ const PAGES = [
 ];
 
 const PAGE_NAMES = {
-  corpus: "语料库管理", segment: "分词与词性标注", parse: "句法分析树",
+  corpus: "语料库管理", normalize: "语言识别与规范化",
+  segment: "分词与词性标注", parse: "句法分析树",
   ner: "命名实体识别", sentiment: "情感分析", summary: "文本摘要",
   translate: "机器翻译", keywords: "关键词提取", embedding: "词向量可视化",
   pipeline: "流水线配置与执行",
